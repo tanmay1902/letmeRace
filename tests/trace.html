@@ -1,0 +1,27 @@
+<!doctype html><meta charset="utf-8"><title>trace</title><pre id="out">running</pre>
+<script type="module">
+// Trace one AI car through a section: ?t=gp&skill=1&from=2900&to=3300
+import { TRACKS } from '../js/tracks.js';
+import { buildTrack } from '../js/trackData.js';
+import { CarPhysics, applyTrack } from '../js/physics.js';
+import { computeRacingLine, computeSpeedProfile, AIDriver } from '../js/ai.js';
+const q = new URLSearchParams(location.search);
+const lines = []; const log = (s) => lines.push(s);
+try {
+  const tr = buildTrack(TRACKS[q.get('t') || 'gp']); computeRacingLine(tr); computeSpeedProfile(tr);
+  const from = +(q.get('from') || 0), to = +(q.get('to') || 1e9);
+  const p = new CarPhysics(); const st = tr.pointAt(0, 0); p.setPose(st.x, st.z, st.heading);
+  const loc = tr.locate(p.x, p.z, null, {}); const ai = new AIDriver(+(q.get('skill') || 1), 0); const me = { phys: p, loc };
+  ai.mistake = 0; ai.pace.mistakeRate = 0;
+  const dt = 1 / 240; let t = 0, prog = 0, lap = 0;
+  for (let f = 0; f < 60 * 150; f++) {
+    const inp = ai.control(p, loc, tr, [me], 1 / 60, t);
+    for (let s = 0; s < 4; s++) { t += dt; p.step(dt, inp); const ps = loc.s; tr.locate(p.x, p.z, loc.idx, loc); let d = loc.s - ps; if (d < -tr.length / 2) d += tr.length; prog += d; applyTrack(p, loc, tr); }
+    lap = Math.floor(prog / tr.length);
+    if (lap === 1 && loc.s >= from && loc.s <= to && f % 6 === 0)
+      log(`s=${loc.s.toFixed(0)} lat=${loc.lat.toFixed(1)} line=${tr.raceE[loc.idx].toFixed(1)} v=${(p.vx*3.6).toFixed(0)} prof=${(ai.profile[loc.idx]*3.6).toFixed(0)} kL=${(tr.raceKs[loc.idx]*1000).toFixed(1)} st=${p.steer.toFixed(3)} aF=${p.slipF.toFixed(3)} aR=${p.slipR.toFixed(3)} th=${inp.throttle.toFixed(2)} br=${inp.brake.toFixed(2)} sf=${p.surfaceName}`);
+    if (lap >= 2) break;
+  }
+} catch (e) { log('ERROR ' + e.stack); }
+document.getElementById('out').textContent = lines.join('\n');
+</script>

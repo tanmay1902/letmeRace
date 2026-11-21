@@ -1,0 +1,96 @@
+<!doctype html><meta charset="utf-8"><title>bench</title><pre id="out">running</pre>
+<script type="module">
+// Headless AI benchmark: ?t=gp,city&n=8&laps=5&skill=0.92
+import { TRACKS } from '../js/tracks.js';
+import { buildTrack } from '../js/trackData.js';
+import { CarPhysics, applyTrack, collideCars } from '../js/physics.js';
+import { computeRacingLine, computeSpeedProfile, AIDriver } from '../js/ai.js';
+const q = new URLSearchParams(location.search);
+const ids = (q.get('t') || 'gp,city').split(',');
+const n = +(q.get('n') || 8), LAPS = +(q.get('laps') || 5), SK = +(q.get('skill') || 0.92);
+const lines = []; const log = (s) => lines.push(s);
+const DT = 1 / 240;
+
+function standings(cars, L) {
+  return cars.slice().sort((a, b) => (a.done && b.done) ? a.finish - b.finish : a.done ? -1 : b.done ? 1 : b.prog - a.prog);
+}
+function makeCar(tr, k, skill) {
+  const p = new CarPhysics();
+  const st = tr.pointAt(-10 - k * 8, k % 2 ? -3 : 3);
+  p.setPose(st.x, st.z, st.heading);
+  const loc = tr.locate(p.x, p.z, null, {});
+  const prog = loc.s > tr.length / 2 ? loc.s - tr.length : loc.s;
+  return { k, phys: p, ai: new AIDriver(skill, k), loc, prog, lapsDone: Math.floor(prog / tr.length), lapStart: 0, laps: [], walls: 0, contacts: 0, resets: 0, off: 0, done: false, finish: 0 };
+}
+function run(tr, cars, maxT) {
+  let t = 0, overtakes = 0, prevOrder = null, contactEv = 0;
+  const contactPairs = new Map();
+  for (let f = 0; f < maxT * 60; f++) {
+    for (const c of cars) {
+      c.input = c.ai.control(c.phys, c.loc, tr, cars, 1 / 60, t);
+      if (c.ai.wantReset) { c.ai.wantReset = false; c.resets++; const p = tr.pointAt(c.loc.s, tr.raceE[c.loc.idx]); c.phys.setPose(p.x, p.z, p.heading); tr.locate(c.phys.x, c.phys.z, null, c.loc); }
+    }
+    for (let s = 0; s < 4; s++) {
+      t += DT;
+      for (const c of cars) {
+        c.phys.step(DT, c.input);
+        const prevS = c.loc.s;
+        tr.locate(c.phys.x, c.phys.z, c.loc.idx, c.loc);
+        let d = c.loc.s - prevS; if (d < -tr.length / 2) d += tr.length; if (d > tr.length / 2) d -= tr.length;
+        c.prog += d;
+        if (applyTrack(c.phys, c.loc, tr) > 2) c.walls++;
+        if (c.phys.surfaceName === 'grass' || c.phys.surfaceName === 'gravel') { c.off += DT; const b = Math.floor(c.loc.s / 50) * 50; c.offAt = c.offAt || {}; c.offAt[b] = (c.offAt[b] || 0) + DT; }
+        const done = Math.floor(c.prog / tr.length);
+        if (done > c.lapsDone) { c.lapsDone = done; if (done >= 1) { c.laps.push(t - c.lapStart); c.lapStart = t; if (done >= LAPS && !c.done) { c.done = true; c.finish = t; } } }
+      }
+      for (let a = 0; a < cars.length; a++) for (let b = a + 1; b < cars.length; b++) {
+        const imp = collideCars(cars[a].phys, cars[b].phys);
+        if (imp > 1.5) {
+          const key = a * 100 + b, last = contactPairs.get(key) ?? -9;
+          if (t - last > 1) { contactEv++; cars[a].contacts++; cars[b].contacts++; }
+          contactPairs.set(key, t);
+        }
+      }
+    }
+    // draft
+    for (const c of cars) {
+      let dr = 1;
+      for (const o of cars) { if (o === c) continue; let ds = o.loc.s - c.loc.s; if (ds < -tr.length / 2) ds += tr.length; if (ds > tr.length / 2) ds -= tr.length; if (ds > 4 && ds < 45 && Math.abs(o.loc.lat - c.loc.lat) < 1.8) dr = Math.min(dr, 1 - 0.28 * (1 - ds / 45)); }
+      c.phys.draft = dr;
+    }
+    if (f % 24 === 0) {
+      const ord = standings(cars, tr.length);
+      if (prevOrder && t > 12) ord.forEach((c, i) => { if (i < prevOrder.indexOf(c) && !c.done) overtakes++; });
+      prevOrder = ord;
+    }
+    if (cars.every((c) => c.done)) break;
+  }
+  return { t, overtakes, contactEv };
+}
+try {
+  for (const id of ids) {
+    const tr = buildTrack(TRACKS[id]);
+    computeRacingLine(tr); computeSpeedProfile(tr);
+    let ideal = 0; for (let i = 0; i < tr.N; i++) ideal += tr.ds / tr.speed[i];
+    // solo pace at skill 1.0
+    const solo = [makeCar(tr, 0, 1.0)];
+    run(tr, solo, 60 + 4 * ideal);
+    const sl = solo[0].laps.slice(1);
+    const oa = solo[0].offAt || {}; log('  solo off-track by s: ' + Object.entries(oa).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}m:${v.toFixed(1)}s(k=${(tr.curv[Math.round(k / tr.ds) % tr.N] * 1000).toFixed(1)})`).join(' '));
+    log(`${id}: profile=${ideal.toFixed(2)}s  solo best=${Math.min(...sl).toFixed(2)} avg=${(sl.reduce((a, b) => a + b, 0) / sl.length).toFixed(2)} walls=${solo[0].walls} off=${solo[0].off.toFixed(1)}s`);
+    // race
+    const cars = []; for (let k = 0; k < n; k++) cars.push(makeCar(tr, k, SK * (1 - (k / n) * 0.035)));
+    const r = run(tr, cars, 120 + LAPS * ideal * 1.6);
+    const tot = (f) => cars.reduce((a, c) => a + f(c), 0);
+    const finished = cars.filter((c) => c.done).length;
+    const fin = cars.filter((c) => c.done).map((c) => c.finish).sort((a, b) => a - b);
+    log(`  race: finished ${finished}/${n}  winner ${fin[0]?.toFixed(1)}s  spread ${(fin[fin.length - 1] - fin[0]).toFixed(1)}s  overtakes=${r.overtakes}  contacts=${r.contactEv}  walls=${tot(c => c.walls)}  resets=${tot(c => c.resets)}  offtrack=${tot(c => c.off).toFixed(1)}s`);
+    const agg = {}; for (const c of cars) for (const [k, v] of Object.entries(c.offAt || {})) agg[k] = (agg[k] || 0) + v;
+    log('  race off-track by s: ' + Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k}m:${v.toFixed(1)}s(k=${(tr.curv[Math.round(k / tr.ds) % tr.N] * 1000).toFixed(1)})`).join(' '));
+    const allL = cars.flatMap((c) => c.laps.slice(1));
+    log(`  laps: best ${Math.min(...allL).toFixed(2)}  mean ${(allL.reduce((a, b) => a + b, 0) / allL.length).toFixed(2)}`);
+  }
+} catch (e) { log('ERROR ' + e.stack); }
+document.getElementById('out').textContent = lines.join('\n');
+document.title = 'done';
+</script>

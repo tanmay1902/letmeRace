@@ -105,7 +105,7 @@ export function getProfile(track, grip, brake) {
 export function skillToPace(skill) {
   const s = clamp((skill - 0.84) / 0.16, 0, 1.1);        // 0 = rookie, 1 = legend
   return {
-    grip: 0.86 + s * 0.11,            // fraction of available grip used in corners
+    grip: 0.86 + s * 0.10,            // fraction of available grip used in corners
     brake: 0.76 + s * 0.13,           // braking aggression
     reaction: 0.42 - s * 0.26,        // start reaction time (s)
     consistency: 0.010 - s * 0.007,   // random pace variation per corner
@@ -220,8 +220,13 @@ export class AIDriver {
     const fwd = dx * sh + dz * ch, left = dx * ch - dz * sh;
     const d2 = fwd * fwd + left * left;
     let steer = Math.atan(2 * CAR.L * left / Math.max(d2, 1));
-    steer -= car.vy * 0.004 * Math.sign(v);
     steer -= (car.r - v * 2 * left / Math.max(d2, 1)) * 0.02;
+    // remove steady-state tracking error so the car really is on its planned line
+    const eHere = clamp(raceE[here] + this.offset, -lim, lim);
+    steer += clamp((eHere - loc.lat) * 0.006, -0.03, 0.03);
+    // catch slides: countersteer toward the direction of travel
+    const beta = Math.atan2(car.vy, Math.max(Math.abs(v), 3));
+    if (Math.abs(beta) > 0.035) steer += beta * 0.9;
 
     // ---- speed target
     const look = (here + 3 + Math.round(Math.max(v, 0) * 0.2 / ds)) % N;
@@ -246,7 +251,10 @@ export class AIDriver {
     let throttle = 0, brake = 0;
     if (err > -0.3) throttle = clamp(0.35 + err * 0.5, 0, 1);
     else if (err < -1.0) brake = clamp(-err * 0.22, 0, 1);
-    if (Math.abs(car.slipR) > 0.14) throttle *= 0.5;
+    // rear stepping out: come off the brakes / throttle like a driver would
+    const oversteer = Math.abs(car.slipR) > 0.085 && Math.abs(car.slipR) > Math.abs(car.slipF) * 0.85;
+    if (oversteer) { brake *= 0.3; throttle *= 0.35; }
+    else if (Math.abs(car.slipR) > 0.14) throttle *= 0.5;
     if (sinceStart < 2.5) throttle = Math.min(throttle, 0.82 + this.pace.grip * 0.18);   // launch modulation
 
     // ---- stuck / facing the wrong way -> recovery manoeuvre (teleport only as a last resort)
@@ -258,6 +266,10 @@ export class AIDriver {
       if (this.recoverCount > 3) { this.wantReset = true; this.recoverCount = 0; this.recover = 0; }
     }
     if (Math.abs(v) > 15) this.recoverCount = 0;
+    // beached in the gravel / grass for too long: marshals recover the car
+    const offSurface = car.surfaceName === 'gravel' || car.surfaceName === 'grass';
+    this.offTime = offSurface && Math.abs(v) < 14 ? (this.offTime || 0) + dt : 0;
+    if (this.offTime > 6) { this.offTime = 0; this.wantReset = true; }
 
     return { throttle, brake, steer: clamp(steer, -CAR.steerMax, CAR.steerMax), shiftUp: false, shiftDown: false };
   }

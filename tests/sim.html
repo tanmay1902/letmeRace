@@ -1,0 +1,50 @@
+<!doctype html><meta charset="utf-8"><title>sim</title><pre id="out">running</pre>
+<script type="module">
+import { TRACKS } from '../js/tracks.js';
+import { buildTrack } from '../js/trackData.js';
+import { CarPhysics, applyTrack, collideCars } from '../js/physics.js';
+import { computeRacingLine, computeSpeedProfile, AIDriver } from '../js/ai.js';
+const lines = [];
+const log = (s) => lines.push(s);
+try {
+  for (const id of (new URLSearchParams(location.search).get('t') || Object.keys(TRACKS).join(',')).split(',')) {
+    const t0 = performance.now();
+    const tr = buildTrack(TRACKS[id]);
+    computeRacingLine(tr); computeSpeedProfile(tr);
+    let wmin = Infinity; for (let i = 0; i < tr.N; i++) wmin = Math.min(wmin, tr.wallL[i], tr.wallR[i]);
+    let vmin = Infinity; for (const v of tr.speed) vmin = Math.min(vmin, v);
+    log(`${id}: len=${tr.length.toFixed(0)} N=${tr.N} minR=${tr.minRadius.toFixed(1)} minSep=${tr.minSep.toFixed(1)} wallMin=${wmin.toFixed(1)} vmin=${(vmin*3.6).toFixed(0)}kph build=${(performance.now()-t0).toFixed(0)}ms`);
+    // run cars
+    const cars = [];
+    for (let k = 0; k < 4; k++) {
+      const p = new CarPhysics();
+      const st = tr.pointAt(-10 - k * 8, k % 2 ? 3 : -3);
+      p.setPose(st.x, st.z, st.heading);
+      const loc = tr.locate(p.x, p.z, null, {});
+      cars.push({ phys: p, ai: new AIDriver(1 - k * 0.02, k), loc, prog: loc.s - tr.length, lastLapT: 0, laps: [], walls: 0, maxLat: 0, resets: 0, vmax: 0 });
+    }
+    const dt = 1 / 240; let t = 0;
+    for (let frame = 0; frame < 60 * 300; frame++) {
+      for (const c of cars) c.input = c.ai.control(c.phys, c.loc, tr, cars, 1 / 60, t);
+      for (let sub = 0; sub < 4; sub++) {
+        t += dt;
+        for (const c of cars) {
+          c.phys.step(dt, c.input);
+          const prevS = c.loc.s;
+          tr.locate(c.phys.x, c.phys.z, c.loc.idx, c.loc);
+          let d = c.loc.s - prevS; if (d < -tr.length / 2) d += tr.length; if (d > tr.length / 2) d -= tr.length;
+          const before = Math.floor(c.prog / tr.length); c.prog += d;
+          if (Math.floor(c.prog / tr.length) > before && c.prog > 0) { c.laps.push(t - c.lastLapT); c.lastLapT = t; }
+          const imp = applyTrack(c.phys, c.loc, tr); if (imp > 2) c.walls++;
+          c.maxLat = Math.max(c.maxLat, Math.abs(c.loc.lat)); c.vmax = Math.max(c.vmax, c.phys.vx);
+        }
+        for (let a = 0; a < cars.length; a++) for (let b = a + 1; b < cars.length; b++) collideCars(cars[a].phys, cars[b].phys);
+      }
+      for (const c of cars) if (c.ai.wantReset) { c.ai.wantReset = false; c.resets++; const p = tr.pointAt(c.loc.s, tr.raceE[c.loc.idx]); c.phys.setPose(p.x, p.z, p.heading); }
+    }
+    cars.forEach((c, k) => log(`  car${k} laps=${c.laps.map(x => x.toFixed(2)).join(', ')} walls=${c.walls} resets=${c.resets} maxLat=${c.maxLat.toFixed(1)} vmax=${(c.vmax*3.6).toFixed(0)}`));
+  }
+} catch (e) { log('ERROR ' + e.stack); }
+document.getElementById('out').textContent = lines.join('\n');
+document.title = 'done';
+</script>
