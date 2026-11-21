@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Race3D – Open-Wheel Racing</title>
+  <meta name="description" content="A realistic 3D open-wheel racing game that runs in the browser. Grand Prix and City street circuit modes.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- ============ MENU ============ -->
+  <div id="menu" class="overlay">
+    <div class="menu-inner">
+      <h1 class="logo">RACE<span>3D</span></h1>
+      <p class="tag">Open-wheel racing · 1000 hp · 5g corners</p>
+
+      <div class="modes">
+        <button class="mode selected" data-track="gp">
+          <div class="mode-art gp"></div>
+          <div class="mode-title">Grand Prix</div>
+          <div class="mode-sub">Valle Verde GP · 3.7 km · day</div>
+        </button>
+        <button class="mode" data-track="city">
+          <div class="mode-art city"></div>
+          <div class="mode-title">City Racer</div>
+          <div class="mode-sub">Harbour City streets · 2.5 km · dusk</div>
+        </button>
+        <button class="mode soon" data-track="iiser" disabled aria-disabled="true" title="Coming soon">
+          <div class="mode-art campus"><span class="badge">COMING SOON</span></div>
+          <div class="mode-title">IISER Mohali</div>
+          <div class="mode-sub">Campus roads · 1.9 km · real map</div>
+        </button>
+      </div>
+
+      <div class="options">
+        <label>Laps
+          <select id="opt-laps"><option>1</option><option selected>3</option><option>5</option><option>10</option></select>
+        </label>
+        <label>Opponents
+          <select id="opt-ai"><option value="0">0 (Time trial)</option><option>3</option><option>5</option><option selected>7</option><option>9</option></select>
+        </label>
+        <label>AI skill
+          <select id="opt-skill"><option value="0.86">Rookie</option><option value="0.92" selected>Pro</option><option value="0.97">Champion</option><option value="1.0">Legend</option></select>
+        </label>
+        <label>Gearbox
+          <select id="opt-gear"><option value="auto" selected>Automatic</option><option value="manual">Manual (Q/E)</option></select>
+        </label>
+        <label>Traction ctrl
+          <select id="opt-tc"><option value="1" selected>On</option><option value="0">Off</option></select>
+        </label>
+        <label>Steering assist
+          <select id="opt-assist"><option value="1" selected>On</option><option value="0">Off</option></select>
+        </label>
+        <label>Commentary
+          <select id="opt-comm"><option value="voice" selected>Voice + captions</option><option value="captions">Captions only</option><option value="off">Off</option></select>
+        </label>
+        <label>Graphics
+          <select id="opt-gfx"><option value="low">Low</option><option value="medium">Medium</option><option value="high" selected>High</option></select>
+        </label>
+      </div>
+
+      <button id="btn-start" class="btn-primary">START RACE</button>
+
+      <div class="controls-help">
+        <div><kbd>W</kbd>/<kbd>↑</kbd> Throttle</div>
+        <div><kbd>S</kbd>/<kbd>↓</kbd> Brake / reverse</div>
+        <div><kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> Steer</div>
+        <div><kbd>Q</kbd>/<kbd>E</kbd> Shift down/up</div>
+        <div><kbd>C</kbd> Camera</div>
+        <div><kbd>R</kbd> Reset car</div>
+        <div><kbd>P</kbd>/<kbd>Esc</kbd> Pause</div>
+        <div><kbd>M</kbd> Mute</div>
+        <div class="pad">🎮 Gamepad supported (RT/LT, stick)</div>
+      </div>
+      <p class="credits">Textures, HDRI skies, tyre &amp; street-lamp models: <a href="https://polyhaven.com" target="_blank" rel="noopener">Poly Haven</a> (CC0). IISER Mohali map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL). Engine: <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a>.</p>
+    </div>
+  </div>
+
+  <!-- ============ LOADING ============ -->
+  <div id="loading" class="overlay hidden">
+    <div class="load-box">
+      <div class="load-title">Loading circuit…</div>
+      <div class="bar"><div id="load-bar"></div></div>
+      <div id="load-text" class="load-text"></div>
+    </div>
+  </div>
+
+  <!-- ============ HUD ============ -->
+  <div id="hud" class="hidden">
+    <div id="tower" class="tower"></div>
+    <div class="topbar">
+      <div class="box"><div class="lbl">POS</div><div id="h-pos" class="big">1/1</div></div>
+      <div class="box"><div class="lbl">LAP</div><div id="h-lap" class="big">1/3</div></div>
+      <div class="box wide"><div class="lbl">TIME</div><div id="h-time" class="mid">0:00.000</div>
+        <div class="sub"><span>LAST <b id="h-last">–</b></span><span>BEST <b id="h-best">–</b></span></div></div>
+    </div>
+    <canvas id="minimap" width="220" height="220"></canvas>
+    <div id="delta" class="delta"></div>
+    <div id="captions" class="captions"></div>
+    <div id="msg" class="msg"></div>
+    <div class="dash">
+      <div class="leds" id="leds"></div>
+      <div class="dash-row">
+        <div class="gear" id="h-gear">N</div>
+        <div class="speed"><span id="h-speed">0</span><small>KM/H</small></div>
+      </div>
+      <div class="rpmbar"><div id="h-rpm"></div></div>
+      <div class="pedals"><div class="ped thr"><div id="h-thr"></div></div><div class="ped brk"><div id="h-brk"></div></div></div>
+      <div id="h-cam" class="cam"></div>
+    </div>
+    <div id="touch" class="touch">
+      <div class="tleft"><button data-touch="left">◀</button><button data-touch="right">▶</button></div>
+      <div class="tright"><button data-touch="brake" class="tb">BRAKE</button><button data-touch="gas" class="tg">GAS</button></div>
+      <button id="t-pause" class="tpause">❚❚</button>
+      <button id="t-cam" class="tcam">CAM</button>
+    </div>
+  </div>
+
+  <!-- ============ PAUSE ============ -->
+  <div id="pause" class="overlay hidden">
+    <div class="panel">
+      <h2>PAUSED</h2>
+      <button id="btn-resume" class="btn-primary">RESUME</button>
+      <button id="btn-restart" class="btn">RESTART</button>
+      <button id="btn-quit" class="btn">QUIT TO MENU</button>
+    </div>
+  </div>
+
+  <!-- ============ RESULTS ============ -->
+  <div id="results" class="overlay hidden">
+    <div class="panel wide">
+      <h2 id="res-title">RACE RESULT</h2>
+      <table id="res-table"></table>
+      <div class="res-btns">
+        <button id="btn-again" class="btn-primary">RACE AGAIN</button>
+        <button id="btn-menu" class="btn">MENU</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="error" class="error hidden"></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
